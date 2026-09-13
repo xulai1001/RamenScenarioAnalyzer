@@ -49,6 +49,7 @@ try
     RunPhase(nameof(TestProjectMetadataAndDependency), TestProjectMetadataAndDependency);
     using var ui = new WorkspaceSmokeSession();
     RunPhase(nameof(TestAnalyzerRegistrations), () => TestAnalyzerRegistrations(ui.Application));
+    await RunPhaseAsync(nameof(TestStateCacheLifecycle), () => TestStateCacheLifecycle(ui));
     await RunPhaseAsync(nameof(TestWorkspaceAndFullBleed), () => TestWorkspaceAndFullBleed(ui));
     await RunPhaseAsync(nameof(TestRegisteredModifierLifecycle), () => TestRegisteredModifierLifecycle(ui));
     await RunPhaseAsync(nameof(TestKeyedHistoryAndInput), () => TestKeyedHistoryAndInput(ui));
@@ -589,23 +590,118 @@ static void TestAnalyzerRegistrations(IApplication application)
     plugin.Initialize(context);
 
     var registrations = context.AnalyzerRegistry.Registrations;
-    RequireCount(registrations.Count, 2, "Ramen analyzer registration count");
-    if (registrations.Any(x => x.Kind is not AnalyzerKind.Response || x.Priority != 1))
-        throw new InvalidOperationException("Ramen registrations must be response handlers with priority 1.");
+    RequireCount(registrations.Count, 4, "Ramen analyzer registration count");
 
     var common = registrations.Single(x => x.PayloadType == typeof(SingleModeRamenExecCommandResponse));
+    if (common.Kind is not AnalyzerKind.Response || common.Priority != 1)
+        throw new InvalidOperationException("Ramen common responses must run at priority 1.");
     RequireSequence(
         common.Patterns,
-        [EndpointPattern.Regex("^/umamusume/single_mode_ramen/(?:change_short_cut|check_event|check_point|continue|exec_command|finish_claw_crane|gain_skills|race_end|race_entry|race_out|ramen_live|select_region|tasting|uraf_effect_apply)$")],
+        [EndpointPattern.Regex("^/umamusume/single_mode_ramen/(?:change_short_cut|check_event|check_point|continue|exec_command|finish_claw_crane|gain_skills|race_end|race_entry|race_out|ramen_live|uraf_effect_apply|tasting|select_region)$")],
         "Ramen common response pattern");
 
     var load = registrations.Single(x => x.PayloadType == typeof(SingleModeRamenLoadResponse));
+    if (load.Kind is not AnalyzerKind.Response || load.Priority != 1)
+        throw new InvalidOperationException("Ramen Load responses must run at priority 1.");
     RequireSequence(
         load.Patterns,
         [EndpointPattern.Exact("/umamusume/single_mode_ramen/load")],
         "Ramen load response pattern");
 
+    var tasting = registrations.Single(x => x.PayloadType == typeof(SingleModeRamenTastingResponse));
+    if (tasting.Kind is not AnalyzerKind.Response || tasting.Priority != 0)
+        throw new InvalidOperationException("Ramen tasting state must update before the training display.");
+    RequireSequence(tasting.Patterns,
+        [EndpointPattern.Exact("/umamusume/single_mode_ramen/tasting")], "Ramen tasting response pattern");
+
+    var region = registrations.Single(x => x.PayloadType == typeof(SingleModeRamenSelectRegionRequest));
+    if (region.Kind is not AnalyzerKind.Request || region.Priority != 0)
+        throw new InvalidOperationException("Ramen region selection must register its request handler.");
+    RequireSequence(region.Patterns,
+        [EndpointPattern.Exact("/umamusume/single_mode_ramen/select_region")], "Ramen region request pattern");
+
     plugin.Dispose();
+}
+
+static async ValueTask TestStateCacheLifecycle(WorkspaceSmokeSession ui)
+{
+    var plugin = new RamenPlugin();
+    var context = new RecordingPluginContext(ui.Application);
+    plugin.Initialize(context);
+    try
+    {
+        var load = CreateRamenLoadResponse(includeDuplicatedScenarioCommands: false);
+        load.data.single_mode_load_common.unchecked_event_array = [new() { story_id = 400000040 }];
+        load.data.ramen_data_set_load = new()
+        {
+            selected_region_id_array = [1, 2, 3],
+            reduce_base_turn_info_array = [new() { feeling_id = 1, reduce_base_turn = 4 }],
+            check_point_pt = 321,
+            expected_check_point_pt = 654
+        };
+        ui.Bootstrap.SwitchTo();
+        await context.DispatchAsync(typeof(GameApi.SingleModeRamen.Load), load);
+        var snapshot = RamenScenarioState.Snapshot();
+        if (!snapshot.loaded || snapshot.single_mode_chara_id != 1 || snapshot.last_ramen != -1
+            || snapshot.check_point_pt != 321 || snapshot.expected_check_point_pt != 654
+            || !ReferenceEquals(Workspace.Current, ui.Bootstrap))
+            throw new InvalidOperationException("Pending events must suppress rendering without suppressing Load state.");
+        RequireSequence(snapshot.selected_region_id_array, [1, 2, 3], "Load regions");
+        RequireSequence(snapshot.reduce_base_turn, [4, 0, 0], "Load base-turn reductions");
+
+        var tasting = new SingleModeRamenTastingResponse
+        {
+            data = new()
+            {
+                chara_info = CreateChara(),
+                last_tasting_info = new() { region_id = 4 },
+                check_point_pt = 100,
+                expected_check_point_pt = 200
+            }
+        };
+        await context.DispatchAsync(typeof(GameApi.SingleModeRamen.Tasting), tasting);
+        snapshot = RamenScenarioState.Snapshot();
+        if (!snapshot.loaded || snapshot.last_ramen != 4 || snapshot.check_point_pt != 100
+            || snapshot.expected_check_point_pt != 200)
+            throw new InvalidOperationException("Same-training tasting must retain complete Load state and update tasting fields.");
+        RequireSequence(snapshot.selected_region_id_array, [1, 2, 3], "Same-training regions");
+        RequireSequence(snapshot.reduce_base_turn, [4, 0, 0], "Same-training base-turn reductions");
+
+        tasting.data.chara_info.single_mode_chara_id = 2;
+        await context.DispatchAsync(typeof(GameApi.SingleModeRamen.Tasting), tasting);
+        snapshot = RamenScenarioState.Snapshot();
+        if (snapshot.loaded || snapshot.single_mode_chara_id != 2 || snapshot.last_ramen != 4
+            || snapshot.check_point_pt != 100 || snapshot.expected_check_point_pt != 200)
+            throw new InvalidOperationException("Tasting in another training must remain incomplete until Load.");
+        RequireSequence(snapshot.selected_region_id_array, [0, 0, 0], "New-training regions");
+        RequireSequence(snapshot.reduce_base_turn, [0, 0, 0], "New-training base-turn reductions");
+
+        load.data.single_mode_load_common.chara_info.single_mode_chara_id = 2;
+        await context.DispatchAsync(typeof(GameApi.SingleModeRamen.Load), load);
+        snapshot = RamenScenarioState.Snapshot();
+        if (!snapshot.loaded || snapshot.last_ramen != -1 || snapshot.check_point_pt != 321
+            || snapshot.expected_check_point_pt != 654)
+            throw new InvalidOperationException("Load must replace partial tasting state for the current training.");
+
+        RamenScenarioState.UpdateRegionSelect(3, new() { selected_region_id_array = [4, 5, 6] });
+        snapshot = RamenScenarioState.Snapshot();
+        if (snapshot.loaded || snapshot.single_mode_chara_id != 3 || snapshot.check_point_pt != 0
+            || snapshot.expected_check_point_pt != 0)
+            throw new InvalidOperationException("Region selection in another training must discard previous Load state.");
+        RequireSequence(snapshot.selected_region_id_array, [4, 5, 6], "New-training selected regions");
+        RequireSequence(snapshot.reduce_base_turn, [0, 0, 0], "New-training selection base-turn reductions");
+    }
+    finally
+    {
+        plugin.Dispose();
+    }
+
+    var cleared = RamenScenarioState.Snapshot();
+    if (cleared.loaded || cleared.single_mode_chara_id != 0 || cleared.last_ramen != 0
+        || cleared.check_point_pt != 0 || cleared.expected_check_point_pt != 0)
+        throw new InvalidOperationException("Plugin disposal must clear the scenario cache.");
+    RequireSequence(cleared.selected_region_id_array, [0, 0, 0], "Disposed regions");
+    RequireSequence(cleared.reduce_base_turn, [0, 0, 0], "Disposed base-turn reductions");
 }
 
 static async ValueTask TestWorkspaceAndFullBleed(WorkspaceSmokeSession ui)

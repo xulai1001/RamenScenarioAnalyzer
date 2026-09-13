@@ -9,6 +9,7 @@ namespace RamenScenarioAnalyzer;
 /// 生命周期：<see cref="UpdateLoad"/> 把 <see cref="RamenStateSnapshot.loaded"/> 置 true；
 /// <see cref="Clear"/> 把所有字段复位为初始值；
 /// 插件 <c>Dispose</c> 时调用 <see cref="Clear"/>。
+/// 带角色标识的部分更新切换育成时先清空旧状态，只有 Load 能将 loaded 置 true。
 /// 消费方读 snapshot 时若 <see cref="RamenStateSnapshot.single_mode_chara_id"/>
 /// 与当前响应的 charaId 不一致，说明是新的一局，应忽略旧 snapshot 并自行重置。
 /// </summary>
@@ -73,6 +74,8 @@ public static class RamenScenarioState
 
         lock (Gate)
         {
+            if (single_mode_chara_id != charaId)
+                Clear();
             single_mode_chara_id = charaId;
             selected_region_id_array = data.selected_region_id_array ?? new int[3];
         }
@@ -95,13 +98,14 @@ public static class RamenScenarioState
     {
         lock (Gate)
         {
+            if (single_mode_chara_id != charaId)
+                Clear();
             single_mode_chara_id = charaId;
             last_ramen = lastTastingInfo is null
                 ? -1
                 : lastTastingInfo.region_id;
             check_point_pt = checkPointPt;
             expected_check_point_pt = expectedCheckPointPt;
-            loaded = true;
         }
     }
 

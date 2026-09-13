@@ -72,6 +72,7 @@ public sealed class RamenScenarioAnalyzer : IPlugin
         RamenTrainingDisplay.Clear(this);
         lock (stateGate)
         {
+            RamenScenarioState.Clear();
             workspace?.RemovePanel(TrainingPanelKey);
             workspace = null;
         }
@@ -109,6 +110,9 @@ public sealed class RamenScenarioAnalyzer : IPlugin
     {
         lock (stateGate)
         {
+            if (data.DataSetLoad is not null)
+                RamenScenarioState.UpdateLoad(data.CharaInfo.single_mode_chara_id, data.DataSetLoad);
+
             if (!CanRenderTrainingPanel(data))
                 return ValueTask.CompletedTask;
 
@@ -127,12 +131,6 @@ public sealed class RamenScenarioAnalyzer : IPlugin
             var historyKey = new RamenDisplayHistory.Key(
                 displayId.SingleModeCharaId,
                 displayId.Turn);
-            // 更新RamenState
-            if (data.DataSetLoad != null)
-            {
-                RamenScenarioState.UpdateLoad(data.CharaInfo.single_mode_chara_id, data.DataSetLoad);
-            }
-
             RamenTrainingDisplay.Update(
                 this,
                 displayId,

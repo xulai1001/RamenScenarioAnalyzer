@@ -5,12 +5,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>2026.07.02</Version>
+    <Version>2026.9.11</Version>
 
     <PluginInternalName>RamenScenarioAnalyzer</PluginInternalName>
     <PluginDisplayName>RamenScenarioAnalyzer</PluginDisplayName>
     <PluginAuthor>UmamusumeResponseAnalyzer</PluginAuthor>
     <PluginDescription>解析拉面杯回合训练信息</PluginDescription>
+    <PluginChangelog>新增拉面杯状态缓存及 tasting/select_region 更新；修复跨育成状态残留和 Load 状态更新时机；允许缺失支援卡数据的训练面板继续显示。</PluginChangelog>
     <PluginTargets>Cygames</PluginTargets>
   </PropertyGroup>
 
