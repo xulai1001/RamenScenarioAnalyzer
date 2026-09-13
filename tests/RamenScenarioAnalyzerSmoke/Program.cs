@@ -264,14 +264,16 @@ static void TestExtraSections()
     var eventTitle = FindCellToken(grouped, "EventLogger").Points[0];
     var eventBody = FindCellToken(grouped, eventWrapped[..wideExtraTextWidth]).Points[0];
     var aiTitle = FindCellToken(grouped, "AI").Points[0];
+    var aiBody = FindCellToken(grouped, "ai-body").Points[0];
     var wrappedHeight = TextFormatter.WordWrapText(wrapped, wideExtraTextWidth).Count();
     RequireEqual(ramenTitle.X, ramenBody.X, "Ramen body indentation");
     RequireEqual(ramenBody.Y + wrappedHeight, eventTitle.Y, "EventLogger title after wrapped Ramen body");
     RequireEqual(eventTitle.X, eventBody.X, "EventLogger body indentation");
-    RequireEqual(
-        eventBody.Y + TextFormatter.WordWrapText(eventWrapped, wideExtraTextWidth).Count(),
-        aiTitle.Y,
-        "AI title after wrapped EventLogger body");
+    RequireEqual(aiTitle.X, aiBody.X, "AI panel body indentation");
+    if (aiTitle.X >= ramenTitle.X)
+        throw new InvalidOperationException("AI section must render on the left side below the main panel, not in the right Extra column.");
+    if (aiTitle.Y <= eventBody.Y)
+        throw new InvalidOperationException("AI section must render below the Ramen main panel.");
     RequireForeground(grouped, "Ramen", 0, new(StandardColor.BrightCyan), "Ramen section title");
     RequireForeground(grouped, "EventLogger", 0, new(StandardColor.BrightCyan), "EventLogger section title");
     RequireForeground(grouped, "AI", 0, new(StandardColor.BrightCyan), "AI section title");

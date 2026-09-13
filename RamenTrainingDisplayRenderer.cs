@@ -95,15 +95,17 @@ internal static class RamenTrainingDisplayRenderer
         const int HeaderHeight = 3;
         const int ImportantHeight = 5;
         const int ScenarioHeight = 3;
-        const int MinimumTrainingHeight = 19;
+        const int MinimumTrainingHeight = 16;
         static readonly int[] HeaderRatios = [4, 6, 6, 3];
 
         readonly int mainWidth;
         readonly int minimumContentWidth;
-        readonly int minimumContentHeight;
+        readonly int topAreaHeight;
         readonly View main;
         readonly FrameView extras;
+        readonly FrameView aiPanel;
         readonly ImmutableArray<RamenDisplayLine> extraRows;
+        readonly ImmutableArray<RamenDisplayLine> aiRows;
 
         public RamenDashboardView(RamenDisplaySnapshot snapshot)
         {
@@ -124,16 +126,28 @@ internal static class RamenTrainingDisplayRenderer
 
             mainWidth = snapshot.MainWidth;
             minimumContentWidth = mainWidth + (mainWidth + 3) / 4;
-            var trainingHeight = Math.Max(
-                MinimumTrainingHeight,
-                snapshot.TrainingCards.Length == 0
+            // 让出 3 行给下半区 AI 面板
+            var trainingHeight = Math.Max(MinimumTrainingHeight, snapshot.TrainingCards.Length == 0
                     ? 0
-                    : snapshot.TrainingCards.Max(x => x.Rows.Length + 4));
-            minimumContentHeight = HeaderHeight + ImportantHeight + ScenarioHeight + trainingHeight;
+                    : snapshot.TrainingCards.Max(x => x.Rows.Length));
+            topAreaHeight = HeaderHeight + ImportantHeight + ScenarioHeight + trainingHeight;
             var normal = GetAttributeForRole(VisualRole.Normal);
             var palette = new RamenPalette(normal);
             SetScheme(palette.BaseScheme);
-            extraRows = [.. snapshot.ExtraSections.SelectMany(section =>
+            // 仅命名 "AI" 的分区下沉到下半区 AI 面板，其余 Extra 分区保留右侧竖列
+            var otherSections = new List<RamenExtraSectionSnapshot>();
+            var aiSections = new List<RamenExtraSectionSnapshot>();
+            foreach (var section in snapshot.ExtraSections)
+            {
+                if (section.Title == "AI")
+                    aiSections.Add(section);
+                else
+                    otherSections.Add(section);
+            }
+
+            extraRows = [.. otherSections.SelectMany(section =>
+                section.Rows.Prepend(RamenDisplayLine.Colored(section.Title, RamenDisplayColor.Cyan)))];
+            aiRows = [.. aiSections.SelectMany(section =>
                 section.Rows.Prepend(RamenDisplayLine.Colored(section.Title, RamenDisplayColor.Cyan)))];
 
             main = new View
@@ -169,7 +183,17 @@ internal static class RamenTrainingDisplayRenderer
                 extraRows,
                 palette,
                 wordWrap: true);
-            Add(main, extras);
+            aiPanel = CreateFrame(
+                "ramen-ai",
+                null,
+                0,
+                topAreaHeight,
+                mainWidth,
+                Dim.Fill(),
+                aiRows,
+                palette,
+                wordWrap: true);
+            Add(main, extras, aiPanel);
         }
 
         protected override void OnSubViewLayout(LayoutEventArgs args)
@@ -178,18 +202,31 @@ internal static class RamenTrainingDisplayRenderer
             var frameHeight = Math.Max(1, Frame.Height);
             var contentWidth = Math.Max(frameWidth, minimumContentWidth);
             var visibleHeight = Math.Max(1, frameHeight - (contentWidth > frameWidth ? 1 : 0));
-            var extraTextWidth = Math.Max(1, contentWidth - mainWidth - 4);
-            var extraHeight = extraRows.Sum(row => row.Text.Length == 0
-                ? 1
-                : TextFormatter.WordWrapText(row.Text, extraTextWidth).Count()) + 2;
-            var contentHeight = Math.Max(visibleHeight, Math.Max(minimumContentHeight, extraHeight));
+            var rightTextWidth = Math.Max(1, contentWidth - mainWidth - 4);
+            var rightExtraHeight = extraRows.Length == 0
+                ? 0
+                : extraRows.Sum(row => row.Text.Length == 0
+                    ? 1
+                    : TextFormatter.WordWrapText(row.Text, rightTextWidth).Count()) + 2;
+            // AI 面板与 Ramen 主面板同宽（mainWidth），上下排布在左侧。
+            var aiTextWidth = Math.Max(1, mainWidth - 4);
+            var aiHeight = aiRows.Length == 0
+                ? 0
+                : aiRows.Sum(row => row.Text.Length == 0
+                    ? 1
+                    : TextFormatter.WordWrapText(row.Text, aiTextWidth).Count()) + 2;
+            var contentHeight = Math.Max(visibleHeight, Math.Max(topAreaHeight + aiHeight, rightExtraHeight));
             var contentSize = new Size(contentWidth, contentHeight);
             if (GetContentSize() != contentSize)
                 SetContentSize(contentSize);
 
-            main.Height = contentHeight;
+            main.Height = topAreaHeight;
+            // Extra 面板在右侧，占据全部高度。
             extras.Width = contentWidth - mainWidth;
             extras.Height = contentHeight;
+            aiPanel.Y = topAreaHeight;
+            aiPanel.Width = mainWidth;
+            aiPanel.Height = aiHeight;
 
             var maxX = Math.Max(0, contentWidth - Math.Max(1, Viewport.Width));
             var maxY = Math.Max(0, contentHeight - Math.Max(1, Viewport.Height));
